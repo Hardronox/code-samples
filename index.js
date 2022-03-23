@@ -1,828 +1,267 @@
-import React, {Component} from 'react';
-import {withRouter} from "react-router";
-import {toast} from "react-toastify";
-import {DateUtils} from 'react-day-picker';
+import React, { Fragment, FC, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { css } from '@emotion/core';
+import useSWR, { cache, useSWRInfinite } from 'swr';
+import Link from 'next/link';
+import { Button } from '@chakra-ui/react';
 
-import {propTypes, defaultProps} from './types';
-import {connected} from './connect';
-import {Container, FilterPaneContainer} from './styled';
-
-import {FilterPane} from "./components/FilterPane/index";
-import ResultsContainer from "./components/Results/ResultsContainer";
-import TruckDetailsContainer from "./components/TruckDetails/TruckDetailsContainer";
+import { EventSession as EventSessionModel } from '../../../state/models/EventSession';
+import { FontFamily } from '../../../enums';
+import { Markdown } from '../../Markdown';
+import { H3 } from '../../core/Heading';
+import { useStores } from '../../../hooks/useStores';
+import { useQueryParams } from '../../../hooks/useQueryParams';
+import { StringParam } from '../../../utils/url-query-string';
 import {
-  StateFieldDimensionForkLength,
-  StateFieldDimensionLiftHeight,
-  StateFieldDimensionOverallHeight,
-  StateFieldDimensionWidth,
-  StateFieldNameBrands,
-  StateFieldNameModels, StateFieldNameRentalDates, StateFieldNameRentalDatesFrom, StateFieldNameRentalDatesTo,
-  StateFieldNameTruckQuantity,
-  StateFieldNameTruckType,
-} from "./constants";
+  FETCH_EVENT_SESSION_LECTURES_KEY,
+  fetchEventSessionLectures,
+} from '../../../fetchers/lectures';
+import { extractSWRInfiniteData } from '../../../utils/swr';
+import { Lecture } from '../../../state/models/Lecture';
 import {
-  getMessageTruckCountInCartSuccess,
-  MessageExceededCurrentTruckTypeInCart, MessageNotValidDateRange,
-} from "./messages";
-import {getParsedProductResponse} from "./helpers/parseProductData";
-import {getParsedFilterResponse} from "./helpers/parseFilterData";
-import posed from 'react-pose';
-import {
-  getTruckTypesCollectionToChoose,
-  getTruckTypesDataToReducerFormat
-} from "../../helpers/truck_types";
-import {
-  createOptionsForTruckTypeFromURL,
-} from "./helpers/url_params";
-import {stateFieldNameToDropDownParams} from "./settings/dropdown_params";
-import {
-  formatRentalDateToSend, getRentalDateEndDefault, getRentalDateStartDefault,
-  isDatesRangeValid
-} from "./helpers/date";
-import {
-  getMandatoryParams,
-  getQueryAfterResetField,
-  getRequestQuery,
-  getResetParams,
-  getTruckDetailsParams,
-  getUpdatedQuery
-} from "./helpers/query_params";
-import {formatDropDownDataToStateData, isDropDownValuesEqual} from "./helpers/optionsDropDown";
-import {
-  getCurrentQuantity,
-  getCurrentTruckTypeId,
-  getCurrentTruckTypeNameToDisplay,
-  getRealQuantityByTruckTypeId,
-  getTruckTypeNamesToDisplay
-} from "./helpers/selectors";
-import {ModalCartInfo} from "./components/ModalCartInfo/index";
-import {BottomTextModalCartInfo, SuccessMessageModalCartInfo} from "./helpers/components";
-import {CartService} from "../../../../servises/CartService";
-import {stateFieldNameToQueryParam} from "./settings/query_params";
-import {checkDimensionValidity} from "./helpers/validation";
-import {getFilteredEnergyTypesVariantsToStateFormat} from "./helpers/filters";
-import {
-  getSelectedTruckTypesFromURL,
-  getUpdatedTruckTypesParamsStringForURL,
-} from "../../helpers/url_params";
-import {FormattedMessage} from "react-intl";
-
-
-const PanelsContainer = posed.div({
-  filter: {
-    x: 0,
-    transition: { duration: 500 }
-    },
-  detailsPanel: {
-    x: "-47%",
-    transition: { duration: 500 }
-    },
-});
-
-
-class FilterPageBase extends Component {
-
-  state = {
-    isInitDataSet: false,
-    filterResponse: null,
-    position: false,
-    modalVisibilityProductCartCompleted: false,
-
-    truckType: null,
-    truckQuantity: stateFieldNameToDropDownParams[StateFieldNameTruckQuantity].defaultValue,
-    rentalDates: {
-      from: '',
-      to: '',
-    },
-    isRangeDayPickerOpen: {
-      from: false,
-      to: false,
-    },
-    weightCapacityInitialMin: 0,
-    weightCapacityInitialMax: 0,
-    weightCapacity: {
-      min: 0,
-      max: 0,
-    },
-    engineTypes: {},
-    brands: stateFieldNameToDropDownParams[StateFieldNameBrands].defaultValue,
-    models: null,
-    forkLengthDimension: "",
-    widthDimension: "",
-    liftLengthDimension: "",
-    overallHeightDimension: "",
-    query: {},
-  };
-
-  componentDidMount() {
-    this.setSelectedTruckTypesToCart();
-    this.setInitialData();
-  };
-
-  componentDidUpdate = (prevProps, prevState) => {
-    this.setParsedFilterInitResponse(prevProps, prevState);
-    this.setUpdatedInitialData(prevProps, prevState);
-    this.showFilterTrucksDataError(prevProps, prevState);
-    this.showFilterInitDataError(prevProps, prevState);
-    this.setSelectedTruckTypesToCart();
-    this.showModalProductCartCompleted(prevProps, prevState);
-  };
-
-  /**---------- Component's life cycles helpers START ----------**/
-  setParsedFilterInitResponse = (prevProps, prevState) => {
-    if(!prevState.isInitDataSet
-      && !this.state.isInitDataSet
-      && this.props.filterOptionsData.data
-      && this.props.product_types
-    ) {
-      const filterResponse = getParsedFilterResponse(this.props.filterOptionsData, this.props.product_types);
-      this.setState((prevState) => {
-        return {
-          isInitDataSet: true,
-          filterResponse,
-        };
-      });
-    }
-  };
-
-  showFilterTrucksDataError = (prevProps, prevState) => {
-    if (prevProps.filterTrucksData.isLoading
-      && !this.props.filterTrucksData.isSuccess
-      && this.props.filterTrucksData.error) {
-      toast.error(this.props.filterTrucksData.error);
-    }
-  };
-
-  showFilterInitDataError = (prevProps, prevState) => {
-    if (prevProps.filterOptionsData.isLoading
-      && !this.props.filterOptionsData.isSuccess
-      && this.props.filterOptionsData.error) {
-      toast.error(this.props.filterOptionsData.error);
-    }
-  };
-
-  showModalProductCartCompleted = (prevProps, prevState) => {
-    const currentTruckTypeId = getCurrentTruckTypeId(this.state);
-    if (currentTruckTypeId &&  this.props.truckTypeToCompleted[currentTruckTypeId] === true
-      && prevProps.truckTypeToCompleted[currentTruckTypeId] === false) {
-      this.handleModalProductCartCompleted();
-    }
-  };
-
-  setInitialData = async () => {
-
-    const rentalDates = {
-      from: getRentalDateStartDefault(),
-      to: getRentalDateEndDefault(),
-    };
-
-    const initialStateData = {
-      rentalDates,
-    };
-
-    await this.setState((prevState) => {
-      return {
-        ...initialStateData,
-      };
-    });
-    // await this.sendQuery();
-  };
-
-  setUpdatedInitialData = async (prevProps, prevState) => {
-    if (!prevState.isInitDataSet && this.state.isInitDataSet) {
-      const {filterResponse: {filterData}} = this.state;
-
-      let truckTypeMap = null;
-      let weightCapacityInitialMin = 0;
-      let weightCapacityInitialMax = 0;
-      let weightCapacity = {min: weightCapacityInitialMin, max: weightCapacityInitialMax};
-      let engineTypes = {};
-
-      if (filterData) {
-        truckTypeMap = filterData.product_type_map;
-        weightCapacityInitialMin = filterData.capacity_range.min_capacity;
-        weightCapacityInitialMax = filterData.capacity_range.max_capacity;
-        weightCapacity = {min: weightCapacityInitialMin, max: weightCapacityInitialMax};
-        engineTypes = getFilteredEnergyTypesVariantsToStateFormat(filterData.energy_types_variants);
-      }
-
-      // Get params from URL
-      const truckType = createOptionsForTruckTypeFromURL(this.props.location.search, truckTypeMap);
-      const initialStateData = {
-        weightCapacity,
-        truckType,
-        weightCapacityInitialMin,
-        weightCapacityInitialMax,
-        engineTypes,
-      };
-
-      await this.setState((prevState) => {
-        const mandatoryParamsForQuery = getMandatoryParams({...prevState, ...initialStateData});
-        return {
-          ...initialStateData,
-          query: {...prevState.query, ...mandatoryParamsForQuery},
-        };
-      });
-      this.sendQuery();
-    }
-  };
-
-  setSelectedTruckTypesToCart = () => {
-    // Set selected types to redux if there are any
-    if (!this.props.location || !this.props.location.search) {
-      return;
-    }
-    const selectedTypes = getSelectedTruckTypesFromURL(this.props.location.search);
-    const currentQuantity = getCurrentQuantity(this.state);
-    const defaultDesiredQuantity = currentQuantity ? currentQuantity : 1;
-
-    if (!this.props.isTruckTypesInitiated) {
-      const cartTruckTypesPayload = getTruckTypesDataToReducerFormat(selectedTypes, defaultDesiredQuantity);
-      if (!cartTruckTypesPayload) {
-        return;
-      }
-      this.props.setTruckTypesToCartAction(cartTruckTypesPayload);
-    }
-  };
-  /**---------- Component's life cycles helpers END ----------**/
-
-  /**---------- Component's State Handlers START ----------**/
-  selectTruck = (serialNumber) => {
-    const queryParams = getTruckDetailsParams(this.state);
-    let queryParamsString = '';
-
-    if (queryParams) {
-      queryParamsString = getRequestQuery(queryParams);
-
-      this.props.getTruckDetails({serialNumber, queryParams: queryParamsString});
-    }
-
-    this.setState({ position: true });
-  };
-
-  goBackToFilters = () => {
-    this.setState({ position: false });
-  };
-
-  handleDropDownFilter = (fieldName, shouldSendQuery = true) => async (valueData) => {
-    if (!fieldName || !this.state.hasOwnProperty([fieldName])) {
-      return;
-    }
-
-    const newFieldState = formatDropDownDataToStateData(valueData);
-    const updatedQuery = getUpdatedQuery(fieldName, this.state.query, newFieldState);
-
-    if (isDropDownValuesEqual(newFieldState, this.state[fieldName])) {
-      return;
-    }
-
-    try {
-      await this.setState((prevState) => {
-        return {
-          [fieldName]: newFieldState,
-          query: updatedQuery,
-        };
-      });
-
-      const currentTruckTypeId = getCurrentTruckTypeId(this.state);
-      const currentQuantity = getCurrentQuantity(this.state);
-
-      if (fieldName === StateFieldNameTruckType) {
-        if(!this.props.truckTypeToCountData[currentTruckTypeId]) {
-          this.setURLParamTruckTypes({truckType: currentTruckTypeId});
-          const cartTruckTypesPayload = getTruckTypesDataToReducerFormat([currentTruckTypeId], currentQuantity);
-          if (!cartTruckTypesPayload) {
-            return;
-          }
-          this.props.setTruckTypesToCartAction(cartTruckTypesPayload);
-        }
-      }
-
-      if (fieldName === StateFieldNameTruckQuantity && this.state[StateFieldNameTruckType][0]) {
-
-        await this.props.setDesiredQuantityTruckTypeAction({
-          truckTypeId: currentTruckTypeId,
-          quantity: newFieldState[0].value
-        });
-
-        if (this.props.truckTypeToExceeded[currentTruckTypeId] === true) {
-          toast.error(MessageExceededCurrentTruckTypeInCart);
-        }
-      }
-
-      if (shouldSendQuery) {
-        this.sendQuery();
-      }
-
-    } catch(error) {
-      throw new Error(`handleDropDownFilter ${error.message}`);
-    }
-  };
-
-  handleTruckTypeDropDownFilter = async (valueData) => {
-    if (!this.state.hasOwnProperty([StateFieldNameTruckType])) {
-      return;
-    }
-
-    const newFieldState = formatDropDownDataToStateData(valueData);
-    const updatedQuery = getUpdatedQuery(StateFieldNameTruckType, this.state.query, newFieldState);
-
-    if (isDropDownValuesEqual(newFieldState, this.state[StateFieldNameTruckType])) {
-      return;
-    }
-
-    delete updatedQuery[stateFieldNameToQueryParam[StateFieldDimensionForkLength]];
-    delete updatedQuery[stateFieldNameToQueryParam[StateFieldDimensionWidth]];
-    delete updatedQuery[stateFieldNameToQueryParam[StateFieldDimensionLiftHeight]];
-    delete updatedQuery[stateFieldNameToQueryParam[StateFieldDimensionOverallHeight]];
-
-    try {
-      await this.setState((prevState) => {
-        return {
-          [StateFieldNameTruckType]: newFieldState,
-          query: updatedQuery,
-          [StateFieldDimensionForkLength]: "",
-          [StateFieldDimensionWidth]: "",
-          [StateFieldDimensionLiftHeight]: "",
-          [StateFieldDimensionOverallHeight]: "",
-        };
-      });
-
-      const currentTruckTypeId = getCurrentTruckTypeId(this.state);
-      const currentQuantity = getCurrentQuantity(this.state);
-
-      if(!this.props.truckTypeToCountData[currentTruckTypeId]) {
-        this.setURLParamTruckTypes({truckType: currentTruckTypeId});
-        const cartTruckTypesPayload = getTruckTypesDataToReducerFormat([currentTruckTypeId], currentQuantity);
-        if (!cartTruckTypesPayload) {
-          return;
-        }
-        this.props.setTruckTypesToCartAction(cartTruckTypesPayload);
-      }
-
-      this.sendQuery();
-
-    } catch(error) {
-      throw new Error(`handleTruckTypeDropDownFilter ${error.message}`);
-    }
-  };
-
-  handleBrandsDropDownFilter = async (valueData) => {
-    if (!this.state.hasOwnProperty([StateFieldNameBrands]) || !this.state.hasOwnProperty([StateFieldNameModels])) {
-      return;
-    }
-
-    try {
-      const newFieldStateBrands = formatDropDownDataToStateData(valueData);
-      const updatedQuery = getUpdatedQuery(StateFieldNameBrands, this.state.query, newFieldStateBrands);
-      const activeQuery = getQueryAfterResetField(StateFieldNameModels, updatedQuery);
-
-      if (isDropDownValuesEqual(newFieldStateBrands, this.state[StateFieldNameBrands])) {
-        return;
-      }
-
-      await this.setState((prevState) => {
-        return {
-          [StateFieldNameBrands]: newFieldStateBrands,
-          [StateFieldNameModels]: null,
-          query: activeQuery,
-        };
-      });
-      this.sendQuery();
-    } catch(error) {
-      throw new Error(`handleBrandsDropDownFilter ${error.message}`);
-    }
-  };
-
-  handleInputDateChange = async (fieldName, newDate) => {
-    if (!fieldName || !this.state.rentalDates.hasOwnProperty([fieldName])) {
-      return;
-    }
-    try {
-      await this.setState((prevState) => {
-        const newFieldState = {...prevState.rentalDates, [fieldName]: newDate};
-        const updatedQuery = getUpdatedQuery(fieldName, this.state.query, newFieldState);
-        return {
-          rentalDates: newFieldState,
-          query: updatedQuery,
-        };
-      });
-      this.sendQuery();
-    } catch(error) {
-      throw new Error(`handleInputDateChange error: ${error.message}`);
-    }
-  };
-
-  handleDimensionFilter = (fieldName, shouldSendQuery = true) => async (event) => {
-    const value = event.target.value;
-    const valueFormatted = Number(value);
-
-    if (!fieldName || !this.state.hasOwnProperty([fieldName]) || checkDimensionValidity(valueFormatted) === false) {
-      return;
-    }
-    try {
-      await this.setState((prevState) => {
-        const newFieldState = {...prevState, [fieldName]: value};
-        const updatedQuery = getUpdatedQuery(fieldName, this.state.query, valueFormatted);
-        if (!value) {
-          delete updatedQuery[stateFieldNameToQueryParam[fieldName]];
-        }
-        return {
-          ...newFieldState,
-          query: updatedQuery,
-        };
-      });
-      this.sendQuery();
-    } catch(error) {
-      throw new Error(`handleDimensionFilter error: ${error.message}`);
-    }
-  };
-
-  handleRangeDayPickerShowing = (rentalDateName) => () => {
-
-    if (!rentalDateName || !this.state.isRangeDayPickerOpen.hasOwnProperty([rentalDateName])) {
-      return;
-    }
-
-    this.setState((prevState) => {
-      return {
-        isRangeDayPickerOpen: {
-          from: false,
-          to: false,
-          [rentalDateName]: !prevState.isRangeDayPickerOpen[rentalDateName],
-        },
-      };
-    });
-  };
-
-  handleDateFilter = (fieldName) => async (valueData) => {
-    if (!fieldName || !this.state.rentalDates.hasOwnProperty([fieldName])) {
-      return;
-    }
-    // If range should be used
-    // const range = DateUtils.addDayToRange(valueData, this.state.rentalDates);
-    const newFieldState = { ...this.state.rentalDates, [fieldName]: valueData};
-    const isValid = isDatesRangeValid(newFieldState[StateFieldNameRentalDatesFrom],
-                                      newFieldState[StateFieldNameRentalDatesTo]);
-    if (!isValid) {
-      toast.error(MessageNotValidDateRange);
-      return;
-    }
-
-    try {
-      await this.setState((prevState) => {
-        const updatedQuery = getUpdatedQuery(StateFieldNameRentalDates, this.state.query, newFieldState);
-        return {
-          rentalDates: newFieldState,
-          isRangeDayPickerOpen: {
-            from: false,
-            to: false,
-          },
-          query: updatedQuery,
-        };
-      });
-      this.sendQuery();
-    } catch(error) {
-      throw new Error(`handleDateFilter error: ${error.message}`);
-    }
-  };
-
-  handleRangeFilter = async (fieldName, {min, max}) => {
-    if (!fieldName || !this.state.hasOwnProperty([fieldName])) {
-      return;
-    }
-
-    if (this.props.weightCapacityInitialMin === min && this.props.weightCapacityInitialMax === max) {
-      // Reset query param
-      this.resetRangeFilter(fieldName);
-      return;
-    }
-
-    try {
-      await this.setState((prevState) => {
-        const newFieldState = {min, max};
-        const updatedQuery = getUpdatedQuery(fieldName, this.state.query, newFieldState);
-        return {
-          [fieldName]: newFieldState,
-          query: updatedQuery,
-        };
-      });
-      // Query is sent in handleAfterChangeRangeFilter
-    } catch(error) {
-      throw new Error(`handleRangeFilter ${error.message}`);
-    }
-  };
-
-  handleAfterChangeRangeFilter = () => {
-    this.sendQuery();
-  };
-
-  resetRangeFilter = async (fieldName) => {
-    const activeQuery = getQueryAfterResetField(fieldName, this.state.query);
-    await this.setState((prevState) => {
-      return {
-        query: activeQuery,
-      };
-    });
-    this.sendQuery();
-  };
-
-  handleResetFilters = async () => {
-    const {filterResponse: {filterData}} = this.state;
-
-    let weightCapacityInitialMin = 0;
-    let weightCapacityInitialMax = 0;
-    let weightCapacity = {min: weightCapacityInitialMin, max: weightCapacityInitialMax};
-    let engineTypes = {};
-
-    if (filterData) {
-      weightCapacityInitialMin = filterData.capacity_range.min_capacity;
-      weightCapacityInitialMax = filterData.capacity_range.max_capacity;
-      weightCapacity = {min: weightCapacityInitialMin, max: weightCapacityInitialMax};
-      engineTypes = getFilteredEnergyTypesVariantsToStateFormat(filterData.energy_types_variants);
-    }
-
-    const resetStateData = {
-      weightCapacityInitialMin,
-      weightCapacityInitialMax,
-      weightCapacity,
-      engineTypes,
-      brands: stateFieldNameToDropDownParams[StateFieldNameBrands].defaultValue,
-      truckQuantity: stateFieldNameToDropDownParams[StateFieldNameTruckQuantity].defaultValue,
-      models: null,
-      forkLengthDimension: "",
-      widthDimension: "",
-      liftLengthDimension: "",
-      overallHeightDimension: "",
-    };
-
-    await this.setState((prevState) => {
-      const resetQuery = getResetParams({...prevState, ...resetStateData});
-      return {
-        ...resetStateData,
-        query: resetQuery,
-      };
-    });
-
-    this.sendQuery();
-  };
-
-  handleStartNewSearch = async () => {
-    await this.handleModalProductCartCompleted();
-    this.handleResetFilters();
-  };
-
-  handleFilterButtons = async (id, fieldName) => {
-    if (!id || !this.state.hasOwnProperty([fieldName]) || !this.state[fieldName].hasOwnProperty([id])) {
-      return;
-    }
-    const idFormatted = String(id);
-
-    try {
-      await this.setState((prevState) => {
-        const newFieldState = {};
-        for (let prop in prevState[fieldName]) {
-          if (prop === idFormatted) {
-            newFieldState[prop] = !prevState[fieldName][id];
-          } else {
-            newFieldState[prop] = false;
-          }
-        }
-        const updatedQuery = getUpdatedQuery(fieldName, this.state.query, newFieldState);
-        return {
-          [fieldName]: newFieldState,
-          query: updatedQuery,
-        };
-      });
-      await this.sendQuery();
-    }catch (error) {
-      throw new Error(`handleFilterButtons ${error.message}`);
-    }
-  };
-
-  handleModalProductCartCompleted = () => {
-    this.setState((prevState) => {
-      return {
-        modalVisibilityProductCartCompleted: !prevState.modalVisibilityProductCartCompleted,
-      };
-    });
-  };
-
-  handleOnClickTruckTypeInModal = async (valueData) => {
-    await this.handleDropDownFilter(StateFieldNameTruckType)(valueData);
-    this.setState((prevState) => {
-      return {
-        modalVisibilityProductCartCompleted: !prevState.modalVisibilityProductCartCompleted,
-        position: false,
-      };
-    });
-  };
-  /**---------- Component's State Handlers END ----------**/
-
-  setURLParamTruckTypes = ({truckType}) => {
-    const selectedTrucksParams = getUpdatedTruckTypesParamsStringForURL(truckType, this.props.location.search);
-    this.props.history.replace({...this.props.history.location, search: selectedTrucksParams});
-  };
-
-  // method for send request
-  sendQuery = () => {
-    this.props.filterTrucksRequest(getRequestQuery(this.state.query));
-  };
-
-  addProductToCart = async (productData) => {
-    const {truckTypeToCompleted, truckTypeToExceeded, truckToProducts} = this.props;
-    const currentTruckTypeId = getCurrentTruckTypeId(this.state);
-    const currentTruckTypeName = getCurrentTruckTypeNameToDisplay(this.state, currentTruckTypeId);
-    const cartService = new CartService(currentTruckTypeId);
-    const truckTypeToCountDataBefore = this.props.truckTypeToCountData[currentTruckTypeId];
-    const isCanAdd = cartService.canAddToCart({
-                                                truckTypeToCompleted,
-                                                truckTypeToExceeded,
-                                                truckToProducts,
-                                                productSerial: productData.product.serial
-    });
-    if (!isCanAdd) { return false; }
-
-    await this.props.addToCartProductAction(productData);
-
-    const truckTypeToCountDataAfter = this.props.truckTypeToCountData[currentTruckTypeId];
-    const isSuccess = cartService.isSuccessResult({
-      countDataBefore: truckTypeToCountDataBefore,
-      countDataAfter: truckTypeToCountDataAfter,
-    });
-
-    if (isSuccess) {
-      toast.success(
-        getMessageTruckCountInCartSuccess(
-          truckTypeToCountDataAfter,
-          {overallReal: this.props.overallRealQuantity, overallDesired: this.props.overallDesiredQuantity},
-          currentTruckTypeName,
-          this.props.truckTypeQuantity,
-        )
-      );
-    }
-  };
-
-  /**---------- Component's render helpers START ----------**/
-  renderTruckDetailsContainer = () => {
-
-    if (this.state.position) {
-      const currentTruckTypeId = getCurrentTruckTypeId(this.state);
-
-      return (
-        <TruckDetailsContainer
-          goBackToFilters={this.goBackToFilters}
-          addProductToCart={this.addProductToCart}
-          // TODO: remove hardcoded productData
-          productData = {{
-            truckTypeId: currentTruckTypeId,
-            rentalDates: {
-              from: formatRentalDateToSend(this.state.rentalDates.from),
-              to: formatRentalDateToSend(this.state.rentalDates.to),
-            }
-          }}
-        />
-      )
-    }
-  };
-  /**---------- Component's render helpers END ----------**/
-
-  render() {
-    const {
-      filterResponse,
-      truckType,
-      engineTypes,
-      brands,
-      models,
-      weightCapacity,
-      truckQuantity,
-      rentalDates,
-      isRangeDayPickerOpen,
-      weightCapacityInitialMin,
-      weightCapacityInitialMax,
-      modalVisibilityProductCartCompleted,
-      forkLengthDimension,
-      widthDimension,
-      liftLengthDimension,
-      overallHeightDimension,
-    } = this.state;
-
-    const {
-      filterTrucksData,
-      filterOptionsData,
-      cartData,
-      truckTypesToChoose,
-      truckTypeToCountData,
-    } = this.props;
-
-    const productResponse = getParsedProductResponse(filterTrucksData);
-    // console.log('this.props.cartData', cartData);
-    // console.log('^^^ state', this.state);
-    // console.log('^^^ props', this.props);
-    // console.log('productsData', productResponse ? productResponse : 'Wait');
-    const isProductsLoading = Boolean(filterTrucksData && filterTrucksData.isLoading === true);
-    const fetchingProductsError = filterTrucksData.error;
-    const fetchingInitError = filterOptionsData.error;
-    const currentTruckTypeId = getCurrentTruckTypeId(this.state);
-
-    let truckTypeNamesToChoose = null;
-    let realQuantityInTruckType = 0;
-    let currentTruckTypeNameToDisplay = '';
-    if (modalVisibilityProductCartCompleted) {
-      truckTypeNamesToChoose = getTruckTypeNamesToDisplay(this.state, truckTypesToChoose);
-      realQuantityInTruckType = getRealQuantityByTruckTypeId(truckTypeToCountData, currentTruckTypeId);
-      currentTruckTypeNameToDisplay = getCurrentTruckTypeNameToDisplay(this.state, currentTruckTypeId);
-    }
-
-    return (
-      <Container>
-        <h1>
-          <FormattedMessage
-            id="Search-Header-Rent a forklift"
-            defaultMessage="Rent a forklift"
-          />
-        </h1>
-        <PanelsContainer pose={this.state.position ? 'detailsPanel' : 'filter'}>
-
-          <FilterPaneContainer>
-            <FilterPane
-              currentTruckTypeId={currentTruckTypeId}
-              engineTypesVariants={filterResponse ? filterResponse.filterData.energy_types_variants : null}
-              brandsVariants={filterResponse ? filterResponse.filterData.brand_variants : null}
-              modelsVariants={filterResponse ? filterResponse.filterData.model_variants : null}
-              truckTypeVariants={filterResponse ? filterResponse.filterData.product_type_variants : null}
-              weightCapacityInitialMin={weightCapacityInitialMin}
-              weightCapacityInitialMax={weightCapacityInitialMax}
-              truckQuantityState={truckQuantity}
-              truckTypeState={truckType}
-              engineTypesState={engineTypes}
-              brandsState={brands}
-              modelsState={models}
-              weightCapacityState={weightCapacity}
-              rentalDatesState={rentalDates}
-              rangeDayPickerOpenState={isRangeDayPickerOpen}
-              forkLengthDimensionState={forkLengthDimension}
-              widthDimensionState={widthDimension}
-              liftLengthDimensionState={liftLengthDimension}
-              overallHeightDimensionState={overallHeightDimension}
-
-              handleDropDownFilter={this.handleDropDownFilter}
-              handleDateFilter={this.handleDateFilter}
-              handleInputDateChange={this.handleInputDateChange}
-              handleBrandsDropDownFilter={this.handleBrandsDropDownFilter}
-              handleTruckTypeDropDownFilter={this.handleTruckTypeDropDownFilter}
-              handleRangeFilter={this.handleRangeFilter}
-              handleRangeDayPickerShowing={this.handleRangeDayPickerShowing}
-              handleAfterChangeRangeFilter={this.handleAfterChangeRangeFilter}
-              handleFilterButtons={this.handleFilterButtons}
-              handleDimensionFilter={this.handleDimensionFilter}
-              handleResetFilters={this.handleResetFilters}
-            />
-          </FilterPaneContainer>
-
-          <ResultsContainer
-            productsData={productResponse ? productResponse.productsData : null}
-            brandMap={filterResponse ? filterResponse.filterData.brand_map : null}
-            locationMap={filterResponse ? filterResponse.filterData.location_map : null}
-            productsCount={productResponse ? productResponse.filterData.products_count : null}
-            organizationMap={filterResponse ? filterResponse.filterData.organization_map : null}
-            dataAttributesMap={filterResponse ? filterResponse.filterData.data_attributes_map : null}
-            isProductsLoading={isProductsLoading}
-            fetchingProductsError={fetchingProductsError || fetchingInitError}
-            selectTruck={this.selectTruck}
-            currentTruckTypeId={currentTruckTypeId}
-          />
-
-          {this.renderTruckDetailsContainer()}
-
-          <ModalCartInfo
-            isOpen={modalVisibilityProductCartCompleted}
-            onCloseHandler = {this.handleModalProductCartCompleted}
-            onClickItemHandler = {this.handleOnClickTruckTypeInModal}
-            title="Congratulations!"
-            message={<SuccessMessageModalCartInfo
-                        quantity={realQuantityInTruckType}
-                        truckTypeName={currentTruckTypeNameToDisplay}
-                     />}
-            truckTypeListTitle="Select the truck type you would like to search next: "
-            bottomText={<BottomTextModalCartInfo onNewSearchHandler={this.handleStartNewSearch} />}
-            firstBtnTitle="View Cart"
-            truckTypesCollection = {getTruckTypesCollectionToChoose(truckTypesToChoose, truckTypeNamesToChoose)}
-          />
-
-        </PanelsContainer>
-
-        <div id="filter"></div>
-        <div id="fixed"></div>
-      </Container>
-    );
-  }
+  FETCH_LECTURE_STATUSES_KEY,
+  fetchLectureStatuses,
+} from '../../../fetchers/lecture-statuses';
+import { isEnabled } from '../../../utils/models/lecture';
+import { LectureSpeakers } from '../LectureSpeakers';
+import { Skeleton, SkeletonText } from '../../core/Skeleton/Skeleton';
+import { FilledButton } from '../../core/Button/variants/FilledButton';
+
+const styledTitleCss = css`
+  margin: 35px 0 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+`;
+
+const StyledMarkdown = styled(Markdown)`
+  margin: 0 0 24px;
+  font-size: 16px;
+  line-height: 24px;
+  font-family: ${FontFamily.IBMPlexSans};
+`;
+
+interface IEventSessionProps {
+  eventSession: EventSessionModel;
+  scope: 'lectures' | 'posters';
+  displayAll?: boolean;
 }
 
-const FilterPageConnected = connected(FilterPageBase);
-FilterPageConnected.propTypes = propTypes;
-FilterPageConnected.defaultProps = defaultProps;
+const ItemsContainer = styled.div<{ isPoster: boolean }>`
+  display: grid;
+  padding-bottom: 16px;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(min(${({ isPoster }) => (isPoster ? '350px' : '290px')}, 100%), 1fr)
+  );
+  grid-gap: 40px;
+`;
 
-// Create a new component that is "connected" (to borrow redux
-// terminology) to the router.
-export const FilterPage = withRouter(FilterPageConnected);
+const PAGE_SIZE = '8';
+
+export const EventSession: FC<IEventSessionProps> = ({
+  eventSession,
+  scope,
+  displayAll = false,
+}) => {
+  const { t } = useTranslation();
+  const { store } = useStores();
+  const { eventId } = useQueryParams({
+    eventId: StringParam,
+  });
+
+  const isPoster = scope === 'posters';
+
+  // hotfix for swr cache clear on page transition
+  // looks like swr bug since persistPage option doesn't work
+  // we should report the bug and fix it on lib level
+  useEffect(() => {
+    return () => {
+      cache.clear();
+    };
+  }, []);
+
+  const { data, error, size, setSize } = useSWRInfinite(
+    (index) => [index + 1, FETCH_EVENT_SESSION_LECTURES_KEY, eventSession.id, isPoster, displayAll],
+    (pageIndex) =>
+      fetchEventSessionLectures(store, eventSession.id, isPoster, PAGE_SIZE, pageIndex),
+    {
+      initialSize: displayAll ? 2 : 1,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    },
+  );
+
+  const { isLoadingMore, isReachingEnd, isEmpty, items } = useMemo(
+    () => extractSWRInfiniteData<Lecture>(data, error, size),
+    [data, error, size],
+  );
+
+  // eslint-disable-next-line no-unused-vars
+  const { data: _ } = useSWR(
+    () => (items.length > 0 ? [FETCH_LECTURE_STATUSES_KEY, ...items] : null),
+    () => fetchLectureStatuses(store, items),
+  );
+
+  const onLoadMore = () => {
+    setSize(size + 1);
+  };
+
+  return (
+    <Fragment key={`fragment-${eventSession.id}`}>
+      <div css={styledTitleCss}>
+        <H3 key={`session-name-${eventSession.id}`}>{eventSession.name}</H3>
+
+        {!isLoadingMore && !isReachingEnd && !isEmpty && !displayAll && (
+          <div css={{ marginLeft: '10px' }}>
+            <Link href={viewAllHref} as={viewAllAs} passHref>
+              <Button as="a" variant="link" fontSize="sm" textTransform="uppercase">
+                {t('common.seeAll')}
+              </Button>
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {eventSession.description && <StyledMarkdown source={eventSession.description} />}
+
+      {!isEmpty && (
+        <ItemsContainer isPoster={isPoster} key={`lectures-container-${eventSession.id}`}>
+          {items.map((lecture) => (
+            <LectureLink
+              key={lecture.id}
+              eventId={eventId}
+              sessionId={eventSession.id}
+              linkSlug={lecture.linkSlug}
+              disabled={!isEnabled(lecture)}
+              isPoster={Boolean(lecture.posterDocument)}
+            >
+              <LectureCard
+                title={lecture.title}
+                publishedAt={lecture.publishedAt}
+                posterUrl={
+                  isPoster ? lecture.mediumPosterDocumentThumbnailUrl : lecture.mediumPosterUrl
+                }
+                isPoster={isPoster}
+                isLive={lecture.streamActive}
+              >
+                <LectureSpeakers speakers={lecture.profiles} />
+              </LectureCard>
+            </LectureLink>
+          ))}
+
+          {isLoadingMore &&
+            Array.from({ length: parseInt(PAGE_SIZE, 10) }, (__, index) => (
+              <div key={index} css={{ height: 290, width: '100%' }}>
+                <Skeleton css={{ width: '100%', height: 160, marginBottom: 25 }} />
+                <SkeletonText noOfLines={3} css={{ width: '100%', padding: 15 }} />
+              </div>
+            ))}
+        </ItemsContainer>
+      )}
+      {!isReachingEnd && displayAll && (
+        <div css={{ textAlign: 'center', paddingTop: 10 }}>
+          <FilledButton
+            css={{ padding: '10px 16px', marginBottom: 20 }}
+            disabled={isLoadingMore}
+            onClick={onLoadMore}
+            type="button"
+          >
+            {t('eventSessionsList.loadMore')}
+          </FilledButton>
+        </div>
+      )}
+    </Fragment>
+  );
+};
+
+
+------------------------------------
+
+
+
+import { NextPage, NextPageContext } from 'next';
+import React, { Fragment } from 'react';
+import { NextSeo } from 'next-seo';
+import getConfig from 'next/config';
+
+import { Layout } from '@layouts/Layout';
+import { Subject } from '@resources/Subject';
+import { ThinLecture } from '@resources/ThinLecture';
+import { Profile } from '@resources/Profile';
+import { useStores } from '@hooks/useStores';
+import { fetchRootSubjects } from '../fetchers/subjects';
+import { fetchLibraryLandingLectures } from '../fetchers/thin-lectures';
+import { fetchLibraryLandingProfile } from '../fetchers/profiles';
+import { AppCollection as AppStore } from '../state/AppStore';
+
+const { publicRuntimeConfig } = getConfig();
+
+interface INextPageProps {
+  subjectIds?: Array<string>;
+  lectureIds?: Array<string>;
+  profileIds?: Array<string>;
+}
+
+const LibraryPage: NextPage<INextPageProps> = ({ subjectIds, lectureIds, profileIds }) => {
+  const { store } = useStores();
+
+  const subjects = store.findByIds(Subject, subjectIds);
+  const lectures = store.findByIds(ThinLecture, lectureIds);
+  const profiles = store.findByIds(Profile, profileIds);
+
+  return (
+    <Fragment>
+      <NextSeo
+        title="Library"
+        openGraph={{
+          url: `${publicRuntimeConfig.baseUrl}library-landing`,
+          images: [
+            {
+              url: `${publicRuntimeConfig.baseUrl}images/library/landing-hero-share.jpg`,
+              width: 818,
+              height: 520,
+              alt: 'Underline.io',
+            },
+          ],
+        }}
+      />
+      <Layout navigationFontColor="white">
+        <LibraryLandingHeading subjects={subjects} />
+        <LibraryLandingLectures lectures={lectures} />
+        <LibraryLandingProfiles profiles={profiles} />
+        <LibraryLandingTopEvents />
+        <LibraryLandingFeatures />
+        <LibraryLandingBanner />
+      </Layout>
+    </Fragment>
+  );
+};
+
+interface IContext extends NextPageContext {
+  store: AppStore;
+}
+
+LibraryPage.getInitialProps = async (ctx: IContext) => {
+  try {
+    const [subjectsRequest, lecturesRequest, profilesRequest] = await Promise.all([
+      fetchRootSubjects(ctx.store, 4),
+      fetchLibraryLandingLectures(ctx.store),
+      fetchLibraryLandingProfile(ctx.store),
+    ]);
+
+    const subjects = subjectsRequest?.data as Array<Subject>;
+    const lectures = lecturesRequest?.data as Array<ThinLecture>;
+    const profiles = profilesRequest?.data as Array<Profile>;
+
+    return {
+      subjectIds: subjects?.map((subject) => subject.id),
+      lectureIds: lectures?.map((lecture) => lecture.id),
+      profileIds: profiles?.map((profile) => profile.id),
+    };
+  } catch (responseWithError) {
+    throw responseWithError.error;
+  }
+};
+
+export default LibraryPage;
